@@ -54,7 +54,7 @@ class Parser:
 
         raise ParserError(
             f"Expected {expected}, found {found.value!r} "
-            f"on line {found.line}, position {found.position}"
+            f"at {found.location}"
         )
 
     def skip_newlines(self) -> None:
@@ -75,7 +75,8 @@ class Parser:
             self.expect(TokenType.NEWLINE)
             self.skip_newlines()
 
-        return Program(statements)
+        location = statements[0].location if statements else None
+        return Program(statements, location)
 
     def parse_statement(self) -> Statement:
         token = self.current_token()
@@ -96,17 +97,17 @@ class Parser:
 
         raise ParserError(
             f"Expected an assignment, log, if, or loop statement, found {token.value!r} "
-            f"on line {token.line}, position {token.position}"
+            f"at {token.location}"
         )
 
     def parse_assignment(self) -> Assignment:
         # Parse an assignment statement in the form => identifier [, identifier]* = expression [, expression]*
         first_target = self.expect(TokenType.IDENTIFIER)
-        targets = [Identifier(first_target.value)]
+        targets = [Identifier(first_target.value, first_target.location)]
 
         while self.match(TokenType.COMMA) is not None:
             target = self.expect(TokenType.IDENTIFIER)
-            targets.append(Identifier(target.value))
+            targets.append(Identifier(target.value, target.location))
 
         self.expect(TokenType.OPERATOR, "=")
 
@@ -117,17 +118,17 @@ class Parser:
         if len(targets) != len(values):
             raise ParserError(
                 f"Assignment has {len(targets)} target(s) but {len(values)} value(s) "
-                f"on line {first_target.line}, position {first_target.position}"
+                f"at {first_target.location}"
             )
 
-        return Assignment(targets, values)
+        return Assignment(targets, values, first_target.location)
 
     def parse_log(self) -> Log:
         # Parse a log statement in the form => log: expression
-        self.expect(TokenType.KEYWORD, "log")
+        log_token = self.expect(TokenType.KEYWORD, "log")
         self.expect(TokenType.COLON)
         expression = self.parse_expression()
-        return Log(expression)
+        return Log(expression, log_token.location)
 
     def parse_block(self) -> list[Statement]:
         """Parse statements between braces and return them as a list."""
@@ -154,7 +155,7 @@ class Parser:
 
     def parse_if(self) -> If:
         """Parse if (condition) { ... }, with optional else or else if."""
-        self.expect(TokenType.KEYWORD, "if")
+        if_token = self.expect(TokenType.KEYWORD, "if")
         self.expect(TokenType.L_PAREN)
         condition = self.parse_expression()
         self.expect(TokenType.R_PAREN)
@@ -187,12 +188,12 @@ class Parser:
             else:
                 else_body = self.parse_block()
 
-        return If(condition, then_body, else_body)
+        return If(condition, then_body, if_token.location, else_body)
 
     def parse_loop(self) -> Loop:
         """Parse loop name from start to end [step amount] { body }."""
         
-        self.expect(TokenType.KEYWORD, "loop")
+        loop_token = self.expect(TokenType.KEYWORD, "loop")
         variable = self.expect(TokenType.IDENTIFIER).value
         self.expect(TokenType.KEYWORD, "from")
         start = self.parse_expression()
@@ -204,7 +205,7 @@ class Parser:
             step = self.parse_expression()
 
         body = self.parse_block()
-        return Loop(variable, start, end, step, body)
+        return Loop(variable, start, end, step, body, loop_token.location)
 
     def parse_expression(self) -> Expression:
         """Start expression parsing at the lowest-precedence operator level."""
@@ -217,7 +218,7 @@ class Parser:
             if operator is None:
                 return expression
             right = self.parse_and()
-            expression = Binary(expression, operator.value, right)
+            expression = Binary(expression, operator.value, right, operator.location)
 
     def parse_and(self) -> Expression:
         expression = self.parse_equality()
@@ -226,7 +227,7 @@ class Parser:
             if operator is None:
                 return expression
             right = self.parse_equality()
-            expression = Binary(expression, operator.value, right)
+            expression = Binary(expression, operator.value, right, operator.location)
 
     def parse_equality(self) -> Expression:
         expression = self.parse_comparison()
@@ -240,7 +241,7 @@ class Parser:
                 return expression
             self.advance()
             right = self.parse_comparison()
-            expression = Binary(expression, operator.value, right)
+            expression = Binary(expression, operator.value, right, operator.location)
 
     def parse_comparison(self) -> Expression:
         expression = self.parse_term()
@@ -254,7 +255,7 @@ class Parser:
                 return expression
             self.advance()
             right = self.parse_term()
-            expression = Binary(expression, operator.value, right)
+            expression = Binary(expression, operator.value, right, operator.location)
 
     def parse_term(self) -> Expression:
         expression = self.parse_factor()
@@ -268,7 +269,7 @@ class Parser:
                 return expression
             self.advance()
             right = self.parse_factor()
-            expression = Binary(expression, operator.value, right)
+            expression = Binary(expression, operator.value, right, operator.location)
 
     def parse_factor(self) -> Expression:
         expression = self.parse_power()
@@ -282,7 +283,7 @@ class Parser:
                 return expression
             self.advance()
             right = self.parse_power()
-            expression = Binary(expression, operator.value, right)
+            expression = Binary(expression, operator.value, right, operator.location)
 
     def parse_power(self) -> Expression:
         expression = self.parse_unary()
@@ -291,7 +292,7 @@ class Parser:
             return expression
 
         right = self.parse_power()
-        return Binary(expression, operator.value, right)
+        return Binary(expression, operator.value, right, operator.location)
 
     def parse_unary(self) -> Expression:
         operator = self.current_token()
@@ -301,7 +302,7 @@ class Parser:
             and operator.value in ("!", "+", "-")
         ):
             self.advance()
-            return Unary(operator.value, self.parse_unary())
+            return Unary(operator.value, self.parse_unary(), operator.location)
 
         return self.parse_primary()
 
@@ -317,21 +318,21 @@ class Parser:
 
         if token.type == TokenType.NUMBER:
             self.advance()
-            return Literal(token.value, "number")
+            return Literal(token.value, "number", token.location)
 
         if token.type == TokenType.STRING:
             self.advance()
-            return Literal(token.value, "string")
+            return Literal(token.value, "string", token.location)
 
         if token.type == TokenType.KEYWORD and token.value in ("true", "false"):
             self.advance()
-            return Literal(token.value, "bool")
+            return Literal(token.value, "bool", token.location)
 
         if token.type == TokenType.IDENTIFIER:
             self.advance()
-            return Identifier(token.value)
+            return Identifier(token.value, token.location)
 
         raise ParserError(
             f"Expected a name or literal, found {token.value!r} "
-            f"on line {token.line}, position {token.position}"
+            f"at {token.location}"
         )

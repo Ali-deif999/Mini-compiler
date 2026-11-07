@@ -1,8 +1,18 @@
 from dataclasses import dataclass
 from .Token import Token, TokenType
+from SourceLocation import SourceLocation
 
 
 KEYWORDS = {"if", "else", "loop", "from", "to", "step", "log", "true", "false"}
+
+
+class LexerError(ValueError):
+    # lexer errors handler
+
+    def __init__(self, message: str, location: SourceLocation) -> None:
+        self.message = message
+        self.location = location
+        super().__init__(f"{message} at {location}")
 
 
 @dataclass
@@ -10,17 +20,27 @@ class Lexer:
     source: str
     position: int = 0
     line: int = 1
+    column: int = 1
 
     def current_char(self) -> str | None:
         if self.position >= len(self.source):
             return None
         return self.source[self.position]
 
+    def current_location(self) -> SourceLocation:
+        return SourceLocation(self.line, self.column, self.position)
 
     def advance(self) -> None:
-        if self.current_char() == "\n":
-            self.line += 1
+        char = self.current_char()
+        if char is None:
+            return
+
         self.position += 1
+        if char == "\n":
+            self.line += 1
+            self.column = 1
+        else:
+            self.column += 1
 
 
     def skip_spaces(self) -> None:
@@ -33,7 +53,7 @@ class Lexer:
 
     def read_word(self) -> Token:
         start = self.position
-        token_line = self.line
+        location = self.current_location()
 
         while self.current_char() is not None:
             char = self.current_char()
@@ -43,58 +63,59 @@ class Lexer:
 
         value = self.source[start:self.position]
         token_type = TokenType.KEYWORD if value in KEYWORDS else TokenType.IDENTIFIER
-        return Token(token_type, value, token_line, start)
+        return Token(token_type, value, location)
 
 
     def read_number(self) -> Token:
         start = self.position
-        token_line = self.line
+        location = self.current_location()
 
         while self.current_char() is not None and self.is_digit(self.current_char()):
             self.advance()
 
         # keeping track of the decimal point correctly
         if self.current_char() == ".":
+            decimal_location = self.current_location()
             self.advance()
             if self.current_char() is None or not self.is_digit(self.current_char()):
-                raise ValueError(
-                    f"Malformed number on line {token_line}, position {start}: "
-                    "a decimal point must be followed by digits"
+                raise LexerError(
+                    "Malformed number: a decimal point must be followed by digits",
+                    decimal_location,
                 )
 
             while self.current_char() is not None and self.is_digit(self.current_char()):
                 self.advance()
 
         value = self.source[start:self.position]
-        return Token(TokenType.NUMBER, value, token_line, start)
+        return Token(TokenType.NUMBER, value, location)
 
     def read_string(self) -> Token:
         start = self.position
-        token_line = self.line
+        location = self.current_location()
         self.advance()  # start after the opening quote
         content_start = self.position
 
         while self.current_char() is not None and self.current_char() != '"':
             if self.current_char() == "\n":
-                raise ValueError(
-                    f"String opened on line {token_line}, position {start} "
-                    "was not closed before the newline"
+                raise LexerError(
+                    "String was not closed before the newline",
+                    location,
                 )
             self.advance()
 
         if self.current_char() is None:
-            raise ValueError(
-                f"String opened on line {token_line}, position {start} "
-                "was not closed before the end of the source"
+            raise LexerError(
+                "String was not closed before the end of the source",
+                location,
             )
 
         value = self.source[content_start:self.position]
         self.advance()  # consume the closing quote
-        return Token(TokenType.STRING, value, token_line, start)
+        return Token(TokenType.STRING, value, location)
 
     def read_operator(self) -> Token:
         start = self.position
-        token_line = self.line
+        location = self.current_location()
         first = self.current_char()
         self.advance()
         second = self.current_char()
@@ -106,19 +127,21 @@ class Lexer:
         # AND and OR must use two matching characters: && and ||.
         elif first == "&":
             if second != "&":
-                raise ValueError(
-                    f"Expected '&&' on line {token_line}, position {start}"
+                raise LexerError(
+                    "Expected '&&' operator",
+                    location,
                 )
             self.advance()
         elif first == "|":
             if second != "|":
-                raise ValueError(
-                    f"Expected '||' on line {token_line}, position {start}"
+                raise LexerError(
+                    "Expected '||' operator",
+                    location,
                 )
             self.advance()
 
         value = self.source[start:self.position]
-        return Token(TokenType.OPERATOR, value, token_line, start)
+        return Token(TokenType.OPERATOR, value, location)
 
 
     def tokenize(self) -> list[Token]:
@@ -139,7 +162,7 @@ class Lexer:
                 self.skip_spaces()
 
             elif char == "\n":
-                tokens.append(Token(TokenType.NEWLINE, "\n", self.line, self.position))
+                tokens.append(Token(TokenType.NEWLINE, "\n", self.current_location()))
                 self.advance()
 
             elif char.isalpha() or char == "_":
@@ -152,16 +175,16 @@ class Lexer:
                 tokens.append(self.read_string())
 
             elif char in punctuation:
-                tokens.append(Token(punctuation[char], char, self.line, self.position))
+                tokens.append(Token(punctuation[char], char, self.current_location()))
                 self.advance()
 
             elif char in operator_starts:
                 tokens.append(self.read_operator())
 
             else:
-                raise ValueError(
-                    f"Unexpected character {char!r} on line {self.line}, "
-                    f"position {self.position}"
+                raise LexerError(
+                    f"Unexpected character {char!r}",
+                    self.current_location(),
                 )
 
         return tokens

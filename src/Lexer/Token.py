@@ -1,6 +1,9 @@
 from dataclasses import dataclass
 from enum import Enum
 
+from SourceLocation import SourceLocation
+
+
 class TokenType(Enum):
     IDENTIFIER = "IDENTIFIER"
     NUMBER = "NUMBER"
@@ -21,11 +24,25 @@ class TokenType(Enum):
 class Token:
     type: TokenType
     value: str
-    line: int
-    position:int
+    location: SourceLocation
+
+    @property
+    def line(self) -> int:
+        return self.location.line
+
+    @property
+    def column(self) -> int:
+        return self.location.column
+
+    @property
+    def position(self) -> int:
+        return self.location.offset
 
     def __str__(self):
-        return f"Token [{self.type} | {self.value} | at Line={self.line} | Position={self.position}]"
+        return (
+            f"Token [{self.type.name} | {self.value!r} | "
+            f"at {self.location}]"
+        )
 
 
 
